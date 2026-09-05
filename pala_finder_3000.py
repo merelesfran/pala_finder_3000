@@ -18,12 +18,24 @@ def cargar_skills():
         return {}
 
 def cargar_perfiles():
+    perfiles = {}
     try:
         with open('profiles.json', 'r', encoding='utf-8') as f:
-            return json.load(f)
+            perfiles.update(json.load(f))
     except FileNotFoundError:
         print("No se encontró profiles.json")
-        return {}
+    
+    try:
+        with open('custom_profiles.json', 'r', encoding='utf-8') as f:
+            perfiles.update(json.load(f))
+    except FileNotFoundError:
+        pass
+    
+    return perfiles
+
+def guardar_perfiles_custom(perfiles_custom):
+    with open('custom_profiles.json', 'w', encoding='utf-8') as f:
+        json.dump(perfiles_custom, f, indent=4, ensure_ascii=False)
 
 SKILL_ALIASES = cargar_skills()
 PERFILES = cargar_perfiles()
@@ -41,7 +53,7 @@ class PalaFinderApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Pala Finder 3000")
-        self.geometry("750x800")
+        self.geometry("800x900")
         self.cv_path = ""
         self.cv_skills = set()
         self.crear_interfaz()
@@ -59,7 +71,7 @@ class PalaFinderApp(ctk.CTk):
         self.label_estado = ctk.CTkLabel(frame_cv, text="Ningún archivo seleccionado", text_color="gray")
         self.label_estado.grid(row=0, column=1, padx=10, pady=10)
         
-        # Selector de perfil
+        # Selector de perfil + botón crear
         if PERFILES:
             frame_perfil = ctk.CTkFrame(self)
             frame_perfil.pack(pady=10, padx=20, fill="x")
@@ -68,6 +80,9 @@ class PalaFinderApp(ctk.CTk):
             self.combo_perfil = ctk.CTkComboBox(frame_perfil, values=list(PERFILES.keys()), command=self.calcular_match)
             self.combo_perfil.set("Seleccionar perfil...")
             self.combo_perfil.grid(row=0, column=1, padx=10, pady=10)
+            
+            self.btn_crear_perfil = ctk.CTkButton(frame_perfil, text="Crear Perfil", command=self.crear_perfil, width=120, height=30)
+            self.btn_crear_perfil.grid(row=0, column=2, padx=10, pady=10)
         
         self.label_instruccion = ctk.CTkLabel(self, text="Skills detectadas (editables):", font=ctk.CTkFont(size=14))
         self.label_instruccion.pack(pady=5)
@@ -108,6 +123,70 @@ class PalaFinderApp(ctk.CTk):
         
         self.btn_buscar = ctk.CTkButton(self, text="BUSCAR LABURO", command=self.buscar_laburo, width=250, height=45, fg_color="#28a745", hover_color="#218838", font=ctk.CTkFont(size=16, weight="bold"))
         self.btn_buscar.pack(pady=20)
+        
+    def crear_perfil(self):
+        """Abre ventana para crear perfil personalizado"""
+        ventana = ctk.CTkToplevel(self)
+        ventana.title("Crear Perfil Personalizado")
+        ventana.geometry("500x500")
+        ventana.grab_set()
+        
+        ctk.CTkLabel(ventana, text="Nombre del Perfil:", font=ctk.CTkFont(size=14)).pack(pady=10)
+        entry_nombre = ctk.CTkEntry(ventana, width=300, placeholder_text="Ej: Contador Senior")
+        entry_nombre.pack(pady=5)
+        
+        ctk.CTkLabel(ventana, text="Skills Requeridas (separadas por coma):", font=ctk.CTkFont(size=12)).pack(pady=10)
+        text_requeridas = ctk.CTkTextbox(ventana, width=400, height=80)
+        text_requeridas.pack(pady=5)
+        text_requeridas.insert("0.0", "excel, contable, sql")
+        
+        ctk.CTkLabel(ventana, text="Skills Deseables (separadas por coma):", font=ctk.CTkFont(size=12)).pack(pady=10)
+        text_deseables = ctk.CTkTextbox(ventana, width=400, height=80)
+        text_deseables.pack(pady=5)
+        text_deseables.insert("0.0", "sap, power bi, inglés")
+        
+        def guardar():
+            nombre = entry_nombre.get().strip()
+            if not nombre:
+                messagebox.showwarning("Error", "El nombre del perfil es obligatorio")
+                return
+            
+            skills_req = [s.strip() for s in text_requeridas.get("0.0", "end").split(",") if s.strip()]
+            skills_des = [s.strip() for s in text_deseables.get("0.0", "end").split(",") if s.strip()]
+            
+            if not skills_req:
+                messagebox.showwarning("Error", "Agregá al menos una skill requerida")
+                return
+            
+            # Cargar perfiles custom existentes
+            try:
+                with open('custom_profiles.json', 'r', encoding='utf-8') as f:
+                    custom_profiles = json.load(f)
+            except FileNotFoundError:
+                custom_profiles = {}
+            
+            # Agregar nuevo perfil
+            custom_profiles[nombre] = {
+                "skills_requeridas": skills_req,
+                "skills_deseables": skills_des,
+                "experiencia_minima": "Personalizado",
+                "seniority": "Personalizado"
+            }
+            
+            # Guardar
+            guardar_perfiles_custom(custom_profiles)
+            
+            # Actualizar perfiles en memoria
+            PERFILES.update(custom_profiles)
+            
+            # Actualizar combo
+            self.combo_perfil.configure(values=list(PERFILES.keys()))
+            
+            messagebox.showinfo("Éxito", f"Perfil '{nombre}' creado correctamente")
+            ventana.destroy()
+        
+        btn_guardar = ctk.CTkButton(ventana, text="Guardar Perfil", command=guardar, width=200, height=35)
+        btn_guardar.pack(pady=20)
         
     def seleccionar_cv(self):
         ruta = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
@@ -164,7 +243,6 @@ class PalaFinderApp(ctk.CTk):
         skills_faltantes_req = skills_requeridas - self.cv_skills
         skills_faltantes_des = skills_deseables - self.cv_skills
         
-        # Calcular score (requeridas valen más)
         score_requeridas = len(skills_encontradas_req) / len(skills_requeridas) * 70 if skills_requeridas else 0
         score_deseables = len(skills_encontradas_des) / len(skills_deseables) * 30 if skills_deseables else 0
         match_percentage = int(score_requeridas + score_deseables)
