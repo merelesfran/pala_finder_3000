@@ -1,5 +1,7 @@
 # Pala Finder 3000
 
+![Pala Finder 3000](screenshot.png)
+
 Herramienta open source para automatizar la búsqueda de empleo sin caer en el spam de los bots. Analiza tu CV localmente, extrae tus skills y te abre búsquedas filtradas en los principales portales de empleo.
 
 ## Filosofía del Proyecto
