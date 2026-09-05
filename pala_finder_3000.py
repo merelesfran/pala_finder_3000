@@ -1,10 +1,12 @@
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import fitz
 import webbrowser
 import json
 import os
+import sqlite3
+from datetime import datetime
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -37,9 +39,49 @@ def guardar_perfiles_custom(perfiles_custom):
     with open('custom_profiles.json', 'w', encoding='utf-8') as f:
         json.dump(perfiles_custom, f, indent=4, ensure_ascii=False)
 
+def init_db():
+    conn = sqlite3.connect('historial.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS busquedas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT,
+            portal TEXT,
+            skill_buscada TEXT,
+            url TEXT,
+            favorito INTEGER DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def guardar_busqueda(portal, skill, url):
+    conn = sqlite3.connect('historial.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'INSERT INTO busquedas (fecha, portal, skill_buscada, url) VALUES (?, ?, ?, ?)',
+        (datetime.now().strftime('%Y-%m-%d %H:%M'), portal, skill, url)
+    )
+    conn.commit()
+    conn.close()
+
+def obtener_historial():
+    conn = sqlite3.connect('historial.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT fecha, portal, skill_buscada, url, favorito FROM busquedas ORDER BY id DESC')
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def limpiar_historial():
+    conn = sqlite3.connect('historial.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM busquedas')
+    conn.commit()
+    conn.close()
+
 SKILL_ALIASES = cargar_skills()
 PERFILES = cargar_perfiles()
-
 GENERAL_KEYWORDS = list(SKILL_ALIASES.keys()) if SKILL_ALIASES else []
 
 PORTALES = {
@@ -53,14 +95,15 @@ class PalaFinderApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Pala Finder 3000")
-        self.geometry("800x900")
+        self.geometry("850x950")
         self.cv_path = ""
         self.cv_skills = set()
+        init_db()
         self.crear_interfaz()
         
     def crear_interfaz(self):
         self.label_titulo = ctk.CTkLabel(self, text="Pala Finder 3000", font=ctk.CTkFont(size=28, weight="bold"))
-        self.label_titulo.pack(pady=15)
+        self.label_titulo.pack(pady=10)
         
         frame_cv = ctk.CTkFrame(self)
         frame_cv.pack(pady=10, padx=20, fill="x")
@@ -71,7 +114,6 @@ class PalaFinderApp(ctk.CTk):
         self.label_estado = ctk.CTkLabel(frame_cv, text="Ningún archivo seleccionado", text_color="gray")
         self.label_estado.grid(row=0, column=1, padx=10, pady=10)
         
-        # Selector de perfil + botón crear
         if PERFILES:
             frame_perfil = ctk.CTkFrame(self)
             frame_perfil.pack(pady=10, padx=20, fill="x")
@@ -87,45 +129,89 @@ class PalaFinderApp(ctk.CTk):
         self.label_instruccion = ctk.CTkLabel(self, text="Skills detectadas (editables):", font=ctk.CTkFont(size=14))
         self.label_instruccion.pack(pady=5)
         
-        self.text_skills = ctk.CTkTextbox(self, width=650, height=120)
-        self.text_skills.pack(pady=10)
+        self.text_skills = ctk.CTkTextbox(self, width=700, height=100)
+        self.text_skills.pack(pady=5)
         self.text_skills.insert("0.0", "Cargá un CV para auto-detectar las skills...")
         self.text_skills.configure(state="disabled")
         
-        # Match Score
         self.frame_match = ctk.CTkFrame(self)
-        self.frame_match.pack(pady=10, padx=20, fill="x")
+        self.frame_match.pack(pady=5, padx=20, fill="x")
         
-        self.label_match_score = ctk.CTkLabel(self.frame_match, text="Match Score: --%", font=ctk.CTkFont(size=20, weight="bold"))
-        self.label_match_score.pack(pady=5)
+        self.label_match_score = ctk.CTkLabel(self.frame_match, text="Match Score: --%", font=ctk.CTkFont(size=18, weight="bold"))
+        self.label_match_score.pack(pady=3)
         
         self.label_match_details = ctk.CTkLabel(self.frame_match, text="", justify="left")
-        self.label_match_details.pack(pady=5)
+        self.label_match_details.pack(pady=3)
         
         frame_config = ctk.CTkFrame(self)
-        frame_config.pack(pady=10, padx=20, fill="x")
+        frame_config.pack(pady=5, padx=20, fill="x")
         
-        ctk.CTkLabel(frame_config, text="Máximo de pestañas:").grid(row=0, column=0, padx=10, pady=10)
+        ctk.CTkLabel(frame_config, text="Máximo de pestañas:").grid(row=0, column=0, padx=10, pady=5)
         self.limit_tabs = ctk.CTkComboBox(frame_config, values=["2", "3", "4", "5", "6", "8", "10"])
         self.limit_tabs.set("4")
-        self.limit_tabs.grid(row=0, column=1, padx=10, pady=10)
+        self.limit_tabs.grid(row=0, column=1, padx=10, pady=5)
         
-        ctk.CTkLabel(frame_config, text="Nuevo Portal (Nombre):").grid(row=1, column=0, padx=10, pady=5)
+        ctk.CTkLabel(frame_config, text="Nuevo Portal (Nombre):").grid(row=1, column=0, padx=10, pady=3)
         self.entry_portal_name = ctk.CTkEntry(frame_config, placeholder_text="Ej: GetOnBoard")
-        self.entry_portal_name.grid(row=1, column=1, padx=10, pady=5)
+        self.entry_portal_name.grid(row=1, column=1, padx=10, pady=3)
         
-        ctk.CTkLabel(frame_config, text="URL (usá {} para la skill):").grid(row=2, column=0, padx=10, pady=5)
+        ctk.CTkLabel(frame_config, text="URL (usá {} para la skill):").grid(row=2, column=0, padx=10, pady=3)
         self.entry_portal_url = ctk.CTkEntry(frame_config, placeholder_text="https://.../empleos-{}")
-        self.entry_portal_url.grid(row=2, column=1, padx=10, pady=5)
+        self.entry_portal_url.grid(row=2, column=1, padx=10, pady=3)
         
-        self.btn_add_portal = ctk.CTkButton(frame_config, text="Agregar Portal", command=self.agregar_portal, width=150, height=30)
-        self.btn_add_portal.grid(row=3, column=0, columnspan=2, pady=10)
+        self.btn_add_portal = ctk.CTkButton(frame_config, text="Agregar Portal", command=self.agregar_portal, width=150, height=28)
+        self.btn_add_portal.grid(row=3, column=0, columnspan=2, pady=5)
         
-        self.btn_buscar = ctk.CTkButton(self, text="BUSCAR LABURO", command=self.buscar_laburo, width=250, height=45, fg_color="#28a745", hover_color="#218838", font=ctk.CTkFont(size=16, weight="bold"))
-        self.btn_buscar.pack(pady=20)
+        self.btn_buscar = ctk.CTkButton(self, text="BUSCAR LABURO", command=self.buscar_laburo, width=250, height=40, fg_color="#28a745", hover_color="#218838", font=ctk.CTkFont(size=16, weight="bold"))
+        self.btn_buscar.pack(pady=10)
+        
+        # Historial
+        frame_historial = ctk.CTkFrame(self)
+        frame_historial.pack(pady=10, padx=20, fill="both", expand=True)
+        
+        frame_historial_header = ctk.CTkFrame(frame_historial)
+        frame_historial_header.pack(fill="x", padx=5, pady=5)
+        
+        ctk.CTkLabel(frame_historial_header, text="Historial de Búsquedas", font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=10)
+        
+        self.btn_limpiar = ctk.CTkButton(frame_historial_header, text="Limpiar", command=self.limpiar_historial_gui, width=80, height=25, fg_color="#dc3545", hover_color="#c82333")
+        self.btn_limpiar.pack(side="right", padx=10)
+        
+        self.tree = ttk.Treeview(frame_historial, columns=("fecha", "portal", "skill", "url"), show="headings", height=8)
+        self.tree.heading("fecha", text="Fecha")
+        self.tree.heading("portal", text="Portal")
+        self.tree.heading("skill", text="Skill")
+        self.tree.heading("url", text="URL")
+        
+        self.tree.column("fecha", width=120)
+        self.tree.column("portal", width=100)
+        self.tree.column("skill", width=120)
+        self.tree.column("url", width=400)
+        
+        scrollbar = ttk.Scrollbar(frame_historial, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.tree.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        scrollbar.pack(side="right", fill="y", pady=5)
+        
+        self.cargar_historial_gui()
+        
+    def cargar_historial_gui(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        historial = obtener_historial()
+        for row in historial:
+            fecha, portal, skill, url, favorito = row
+            icono = "★" if favorito else ""
+            self.tree.insert("", "end", values=(f"{fecha} {icono}", portal, skill, url))
+    
+    def limpiar_historial_gui(self):
+        if messagebox.askyesno("Confirmar", "¿Seguro que querés borrar todo el historial?"):
+            limpiar_historial()
+            self.cargar_historial_gui()
         
     def crear_perfil(self):
-        """Abre ventana para crear perfil personalizado"""
         ventana = ctk.CTkToplevel(self)
         ventana.title("Crear Perfil Personalizado")
         ventana.geometry("500x500")
@@ -158,14 +244,12 @@ class PalaFinderApp(ctk.CTk):
                 messagebox.showwarning("Error", "Agregá al menos una skill requerida")
                 return
             
-            # Cargar perfiles custom existentes
             try:
                 with open('custom_profiles.json', 'r', encoding='utf-8') as f:
                     custom_profiles = json.load(f)
             except FileNotFoundError:
                 custom_profiles = {}
             
-            # Agregar nuevo perfil
             custom_profiles[nombre] = {
                 "skills_requeridas": skills_req,
                 "skills_deseables": skills_des,
@@ -173,13 +257,8 @@ class PalaFinderApp(ctk.CTk):
                 "seniority": "Personalizado"
             }
             
-            # Guardar
             guardar_perfiles_custom(custom_profiles)
-            
-            # Actualizar perfiles en memoria
             PERFILES.update(custom_profiles)
-            
-            # Actualizar combo
             self.combo_perfil.configure(values=list(PERFILES.keys()))
             
             messagebox.showinfo("Éxito", f"Perfil '{nombre}' creado correctamente")
@@ -287,8 +366,10 @@ class PalaFinderApp(ctk.CTk):
                     break
                 url_final = url_base.format(skill_url)
                 webbrowser.open(url_final)
+                guardar_busqueda(portal, skill, url_final)
                 total_abiertas += 1
-                
+        
+        self.cargar_historial_gui()
         messagebox.showinfo("Listo bo", f"Se abrieron {total_abiertas} pestañas. A aplicar.")
 
 if __name__ == "__main__":
