@@ -7,7 +7,9 @@ import json
 import os
 import sqlite3
 import re
+import hashlib
 from datetime import datetime
+from collections import Counter
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -43,54 +45,116 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS busquedas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha TEXT, portal TEXT, skill_buscada TEXT, url TEXT, favorito INTEGER DEFAULT 0
+            fecha TEXT, portal TEXT, skill_buscada TEXT, url TEXT, 
+            favorito INTEGER DEFAULT 0, fingerprint TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS metricas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT, skill TEXT, portal TEXT, match_score INTEGER
         )
     ''')
     conn.commit()
     conn.close()
 
-def guardar_busqueda(portal, skill, url):
+def guardar_busqueda(portal, skill, url, fingerprint=None):
     conn = sqlite3.connect('historial.db')
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO busquedas (fecha, portal, skill_buscada, url) VALUES (?, ?, ?, ?)',
-                   (datetime.now().strftime('%Y-%m-%d %H:%M'), portal, skill, url))
+    cursor.execute(
+        'INSERT INTO busquedas (fecha, portal, skill_buscada, url, fingerprint) VALUES (?, ?, ?, ?, ?)',
+        (datetime.now().strftime('%Y-%m-%d %H:%M'), portal, skill, url, fingerprint)
+    )
+    conn.commit()
+    conn.close()
+
+def guardar_metrica(skill, portal, match_score):
+    conn = sqlite3.connect('historial.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'INSERT INTO metricas (fecha, skill, portal, match_score) VALUES (?, ?, ?, ?)',
+        (datetime.now().strftime('%Y-%m-%d'), skill, portal, match_score)
+    )
     conn.commit()
     conn.close()
 
 def obtener_historial():
     conn = sqlite3.connect('historial.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT fecha, portal, skill_buscada, url, favorito FROM busquedas ORDER BY id DESC')
+    cursor.execute('SELECT fecha, portal, skill_buscada, url, favorito FROM busquedas ORDER BY id DESC LIMIT 50')
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+def obtener_metricas():
+    conn = sqlite3.connect('historial.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT skill, COUNT(*) FROM metricas GROUP BY skill ORDER BY COUNT(*) DESC LIMIT 10')
+    skills = cursor.fetchall()
+    cursor.execute('SELECT COUNT(*) FROM busquedas')
+    total = cursor.fetchone()[0]
+    cursor.execute('SELECT COUNT(DISTINCT fingerprint) FROM busquedas')
+    duplicados = total - cursor.fetchone()[0]
+    conn.close()
+    return {'skills': skills, 'total_busquedas': total, 'duplicados': duplicados}
 
 def limpiar_historial():
     conn = sqlite3.connect('historial.db')
     cursor = conn.cursor()
     cursor.execute('DELETE FROM busquedas')
+    cursor.execute('DELETE FROM metricas')
     conn.commit()
     conn.close()
+
+def calcular_fingerprint(empresa, titulo, ubicacion):
+    texto = f"{empresa.lower()}{titulo.lower()}{ubicacion.lower()}"
+    return hashlib.md5(texto.encode()).hexdigest()
 
 SKILL_ALIASES = cargar_skills()
 PERFILES = cargar_perfiles()
 
+class PortalAdapter:
+    def __init__(self, nombre, base_url, query_patterns=None):
+        self.nombre = nombre
+        self.base_url = base_url
+        self.query_patterns = query_patterns or ["{}"]
+    
+    def build_search_url(self, skill, seniority="", location="Argentina"):
+        for pattern in self.query_patterns:
+            url = pattern.format(skill=skill, seniority=seniority, location=location)
+            if url:
+                return url
+        return self.base_url.format(skill)
+
 PORTALES = {
-    "LinkedIn": "https://www.linkedin.com/jobs/search/?keywords={}&location=Argentina&f_WT=2",
-    "Indeed": "https://ar.indeed.com/jobs?q={}&l=Argentina",
-    "Computrabajo": "https://www.computrabajo.com.ar/empleos-de-{}",
-    "Bumeran": "https://www.bumeran.com.ar/empleos-busqueda-{}.html"
+    "LinkedIn": PortalAdapter("LinkedIn", 
+        "https://www.linkedin.com/jobs/search/?keywords={}&location=Argentina&f_WT=2",
+        [
+            "https://www.linkedin.com/jobs/search/?keywords={skill}&location=Argentina&f_WT=2",
+            "https://www.linkedin.com/jobs/search/?keywords={skill}%20{seniority}&location=Argentina&f_WT=2"
+        ]),
+    "Indeed": PortalAdapter("Indeed",
+        "https://ar.indeed.com/jobs?q={}&l=Argentina",
+        ["https://ar.indeed.com/jobs?q={skill}&l=Argentina"]),
+    "Computrabajo": PortalAdapter("Computrabajo",
+        "https://www.computrabajo.com.ar/empleos-de-{}",
+        ["https://www.computrabajo.com.ar/empleos-de-{skill}"]),
+    "Bumeran": PortalAdapter("Bumeran",
+        "https://www.bumeran.com.ar/empleos-busqueda-{}.html",
+        ["https://www.bumeran.com.ar/empleos-busqueda-{skill}.html"])
 }
 
 class PalaFinderApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Pala Finder 3000")
-        self.geometry("900x1000")
+        self.title("Pala Finder 3000 - RAM Mode: LOW")
+        self.geometry("950x1050")
         self.cv_path = ""
         self.cv_skills = set()
         self.cv_years = 0
         self.cv_modality = "Cualquiera"
+        self.pestanas_abiertas = 0
+        self.max_pestanas = 4
         init_db()
         self.crear_interfaz()
         
@@ -98,6 +162,7 @@ class PalaFinderApp(ctk.CTk):
         self.label_titulo = ctk.CTkLabel(self, text="Pala Finder 3000", font=ctk.CTkFont(size=28, weight="bold"))
         self.label_titulo.pack(pady=10)
         
+        # Frame CV
         frame_cv = ctk.CTkFrame(self)
         frame_cv.pack(pady=10, padx=20, fill="x")
         
@@ -107,6 +172,7 @@ class PalaFinderApp(ctk.CTk):
         self.label_estado = ctk.CTkLabel(frame_cv, text="Ningún archivo seleccionado", text_color="gray")
         self.label_estado.grid(row=0, column=1, padx=10, pady=10)
         
+        # Perfil
         if PERFILES:
             frame_perfil = ctk.CTkFrame(self)
             frame_perfil.pack(pady=10, padx=20, fill="x")
@@ -119,10 +185,11 @@ class PalaFinderApp(ctk.CTk):
             self.btn_crear_perfil = ctk.CTkButton(frame_perfil, text="Crear Perfil", command=self.crear_perfil, width=120, height=30)
             self.btn_crear_perfil.grid(row=0, column=2, padx=10, pady=10)
         
+        # Skills
         self.label_instruccion = ctk.CTkLabel(self, text="Skills detectadas (editables):", font=ctk.CTkFont(size=14))
         self.label_instruccion.pack(pady=5)
         
-        self.text_skills = ctk.CTkTextbox(self, width=750, height=80)
+        self.text_skills = ctk.CTkTextbox(self, width=800, height=80)
         self.text_skills.pack(pady=5)
         self.text_skills.insert("0.0", "Cargá un CV para auto-detectar las skills...")
         self.text_skills.configure(state="disabled")
@@ -140,13 +207,17 @@ class PalaFinderApp(ctk.CTk):
         self.label_skill_gap = ctk.CTkLabel(self.frame_match, text="", justify="left", text_color="#f39c12")
         self.label_skill_gap.pack(pady=5)
         
+        # Configuración
         frame_config = ctk.CTkFrame(self)
         frame_config.pack(pady=10, padx=20, fill="x")
         
-        ctk.CTkLabel(frame_config, text="Máximo de pestañas:").grid(row=0, column=0, padx=10, pady=5)
-        self.limit_tabs = ctk.CTkComboBox(frame_config, values=["2", "3", "4", "5", "6", "8", "10"])
+        ctk.CTkLabel(frame_config, text="Máximo de pestañas (RAM Mode):").grid(row=0, column=0, padx=10, pady=5)
+        self.limit_tabs = ctk.CTkComboBox(frame_config, values=["2", "3", "4", "5", "6"], command=self.actualizar_ram_mode)
         self.limit_tabs.set("4")
         self.limit_tabs.grid(row=0, column=1, padx=10, pady=5)
+        
+        self.label_ram_mode = ctk.CTkLabel(frame_config, text=" RAM Mode: LOW", text_color="#28a745")
+        self.label_ram_mode.grid(row=0, column=2, padx=10, pady=5)
         
         ctk.CTkLabel(frame_config, text="Nuevo Portal (Nombre):").grid(row=1, column=0, padx=10, pady=3)
         self.entry_portal_name = ctk.CTkEntry(frame_config, placeholder_text="Ej: GetOnBoard")
@@ -161,6 +232,15 @@ class PalaFinderApp(ctk.CTk):
         
         self.btn_buscar = ctk.CTkButton(self, text="BUSCAR LABURO", command=self.buscar_laburo, width=250, height=40, fg_color="#28a745", hover_color="#218838", font=ctk.CTkFont(size=16, weight="bold"))
         self.btn_buscar.pack(pady=10)
+        
+        # Dashboard de Métricas
+        self.frame_metricas = ctk.CTkFrame(self)
+        self.frame_metricas.pack(pady=10, padx=20, fill="x")
+        
+        ctk.CTkLabel(self.frame_metricas, text="📊 Dashboard de Métricas", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=5)
+        
+        self.label_metricas = ctk.CTkLabel(self.frame_metricas, text="Cargá el CV y empezá a buscar para ver métricas", justify="left")
+        self.label_metricas.pack(pady=5)
         
         # Historial
         frame_historial = ctk.CTkFrame(self)
@@ -199,28 +279,45 @@ class PalaFinderApp(ctk.CTk):
         for row in obtener_historial():
             fecha, portal, skill, url, favorito = row
             self.tree.insert("", "end", values=(fecha, portal, skill, url))
+        
+        metricas = obtener_metricas()
+        if metricas['total_busquedas'] > 0:
+            skills_text = "\n".join([f"{s[0]}: {s[1]} búsquedas" for s in metricas['skills'][:5]])
+            metrics_text = (f"Total búsquedas: {metricas['total_busquedas']}\n"
+                          f"Duplicados detectados: {metricas['duplicados']}\n\n"
+                          f"Skills más buscadas:\n{skills_text}")
+            self.label_metricas.configure(text=metrics_text)
     
     def limpiar_historial_gui(self):
         if messagebox.askyesno("Confirmar", "¿Seguro que querés borrar todo el historial?"):
             limpiar_historial()
             self.cargar_historial_gui()
         
+    def actualizar_ram_mode(self, event=None):
+        self.max_pestanas = int(self.limit_tabs.get())
+        if self.max_pestanas <= 3:
+            self.label_ram_mode.configure(text="🟢 RAM Mode: LOW", text_color="#28a745")
+        elif self.max_pestanas <= 5:
+            self.label_ram_mode.configure(text="🟡 RAM Mode: MEDIUM", text_color="#f39c12")
+        else:
+            self.label_ram_mode.configure(text="🔴 RAM Mode: HIGH", text_color="#dc3545")
+        
     def crear_perfil(self):
         ventana = ctk.CTkToplevel(self)
         ventana.title("Crear Perfil Personalizado")
-        ventana.geometry("500x500")
+        ventana.geometry("600x600")
         ventana.grab_set()
         
         ctk.CTkLabel(ventana, text="Nombre del Perfil:", font=ctk.CTkFont(size=14)).pack(pady=10)
-        entry_nombre = ctk.CTkEntry(ventana, width=300, placeholder_text="Ej: Contador Senior")
+        entry_nombre = ctk.CTkEntry(ventana, width=400, placeholder_text="Ej: Contador Senior")
         entry_nombre.pack(pady=5)
         
         ctk.CTkLabel(ventana, text="Skills Requeridas (separadas por coma):", font=ctk.CTkFont(size=12)).pack(pady=10)
-        text_requeridas = ctk.CTkTextbox(ventana, width=400, height=80)
+        text_requeridas = ctk.CTkTextbox(ventana, width=500, height=60)
         text_requeridas.pack(pady=5)
         
         ctk.CTkLabel(ventana, text="Skills Deseables (separadas por coma):", font=ctk.CTkFont(size=12)).pack(pady=10)
-        text_deseables = ctk.CTkTextbox(ventana, width=400, height=80)
+        text_deseables = ctk.CTkTextbox(ventana, width=500, height=60)
         text_deseables.pack(pady=5)
         
         ctk.CTkLabel(ventana, text="Seniority (Junior/Mid/Senior):", font=ctk.CTkFont(size=12)).pack(pady=10)
@@ -233,6 +330,11 @@ class PalaFinderApp(ctk.CTk):
         combo_modality.set("Remoto")
         combo_modality.pack(pady=5)
         
+        ctk.CTkLabel(ventana, text="Excluir (separadas por coma):", font=ctk.CTkFont(size=12)).pack(pady=10)
+        text_exclude = ctk.CTkTextbox(ventana, width=500, height=60)
+        text_exclude.pack(pady=5)
+        text_exclude.insert("0.0", "senior, lead, manager, 5 años")
+        
         def guardar():
             nombre = entry_nombre.get().strip()
             if not nombre:
@@ -241,6 +343,7 @@ class PalaFinderApp(ctk.CTk):
             
             skills_req = [s.strip() for s in text_requeridas.get("0.0", "end").split(",") if s.strip()]
             skills_des = [s.strip() for s in text_deseables.get("0.0", "end").split(",") if s.strip()]
+            exclude = [s.strip() for s in text_exclude.get("0.0", "end").split(",") if s.strip()]
             
             if not skills_req:
                 messagebox.showwarning("Error", "Agregá al menos una skill requerida")
@@ -256,7 +359,8 @@ class PalaFinderApp(ctk.CTk):
                 "skills_requeridas": skills_req,
                 "skills_deseables": skills_des,
                 "seniority": combo_seniority.get(),
-                "modality": combo_modality.get()
+                "modality": combo_modality.get(),
+                "exclude_keywords": exclude
             }
             
             guardar_perfiles_custom(custom_profiles)
@@ -282,7 +386,6 @@ class PalaFinderApp(ctk.CTk):
             texto = "".join([pagina.get_text() for pagina in doc]).lower()
             doc.close()
             
-            # Detectar skills
             skills_detectadas = set()
             for skill_base, aliases in SKILL_ALIASES.items():
                 if skill_base in texto:
@@ -293,11 +396,9 @@ class PalaFinderApp(ctk.CTk):
                         break
             self.cv_skills = skills_detectadas
             
-            # Detectar años de experiencia (regex simple)
             years_matches = re.findall(r'(\d+)\s*(años|years|anos)', texto)
             self.cv_years = max([int(y[0]) for y in years_matches]) if years_matches else 0
             
-            # Detectar modalidad
             self.cv_modality = "Cualquiera"
             if "remoto" in texto or "remote" in texto: self.cv_modality = "Remoto"
             elif "hibrido" in texto or "hybrid" in texto: self.cv_modality = "Hibrido"
@@ -329,54 +430,51 @@ class PalaFinderApp(ctk.CTk):
         skills_deseables = set(perfil["skills_deseables"])
         perfil_seniority = perfil.get("seniority", "Junior")
         perfil_modality = perfil.get("modality", "Cualquiera")
+        exclude_keywords = perfil.get("exclude_keywords", [])
         
-        # 1. Score de Skills (60%)
         skills_encontradas_req = skills_requeridas.intersection(self.cv_skills)
         skills_encontradas_des = skills_deseables.intersection(self.cv_skills)
         score_skills = (len(skills_encontradas_req) / len(skills_requeridas) * 0.6) if skills_requeridas else 0
         score_skills += (len(skills_encontradas_des) / len(skills_deseables) * 0.2) if skills_deseables else 0
         
-        # 2. Score de Seniority (20%)
         score_seniority = 0
         seniority_ranges = {"Junior": (0, 2), "Mid": (2, 5), "Senior": (5, 99)}
         if perfil_seniority in seniority_ranges:
             min_y, max_y = seniority_ranges[perfil_seniority]
             if min_y <= self.cv_years <= max_y:
                 score_seniority = 0.2
-            elif abs(self.cv_years - min_y) <= 1: # Margen de error de 1 año
+            elif abs(self.cv_years - min_y) <= 1:
                 score_seniority = 0.1
         
-        # 3. Score de Modalidad (20%)
         score_modality = 0.2 if perfil_modality == "Cualquiera" or perfil_modality == self.cv_modality else 0.0
         
-        # Total
         match_percentage = int((score_skills + score_seniority + score_modality) * 100)
         
         self.label_match_score.configure(text=f"Match Score: {match_percentage}%")
         
         details = f"✓ Skills: {', '.join(sorted(skills_encontradas_req)) if skills_encontradas_req else 'Ninguna'}\n"
         details += f"✗ Faltan: {', '.join(sorted(skills_requeridas - self.cv_skills)) if skills_requeridas - self.cv_skills else 'Ninguna'}\n"
-        details += f"📅 Experiencia detectada: {self.cv_years} años (Perfil pide: {perfil_seniority})\n"
-        details += f"🏠 Modalidad detectada: {self.cv_modality} (Perfil pide: {perfil_modality})"
+        details += f"📅 Experiencia: {self.cv_years} años (Perfil: {perfil_seniority})\n"
+        details += f"🏠 Modalidad: {self.cv_modality} (Perfil: {perfil_modality})"
+        if exclude_keywords:
+            details += f"\n Excluye: {', '.join(exclude_keywords[:3])}"
         self.label_match_details.configure(text=details)
         
-        # Skill Gap Analytics
         skills_faltantes = list(skills_requeridas - self.cv_skills)
         if skills_faltantes:
-            # Calcular score potencial si aprende las skills faltantes
-            potential_score_skills = 0.8 # 60% requeridas + 20% deseables (asumiendo que aprende las req)
+            potential_score_skills = 0.8
             potential_total = int((potential_score_skills + score_seniority + score_modality) * 100)
-            gap_text = f"🚀 Skill Gap: Si aprendés {', '.join(skills_faltantes[:3])}, tu match subiría al {potential_total}%"
+            gap_text = f" Skill Gap: Si aprendés {', '.join(skills_faltantes[:3])}, subirías al {potential_total}%"
             self.label_skill_gap.configure(text=gap_text)
         else:
-            self.label_skill_gap.configure(text="🔥 ¡Tenés todas las skills requeridas! Enfocate en seniority y modalidad.")
+            self.label_skill_gap.configure(text="🔥 ¡Tenés todas las skills requeridas!")
 
     def agregar_portal(self):
         nombre = self.entry_portal_name.get().strip()
         url = self.entry_portal_url.get().strip()
         
         if nombre and url and "{}" in url:
-            PORTALES[nombre] = url
+            PORTALES[nombre] = PortalAdapter(nombre, url)
             messagebox.showinfo("Éxito", f"Portal '{nombre}' agregado.")
             self.entry_portal_name.delete(0, 'end')
             self.entry_portal_url.delete(0, 'end')
@@ -390,24 +488,41 @@ class PalaFinderApp(ctk.CTk):
             return
         
         skills_a_buscar = [s.strip() for s in texto_skills.split(",") if s.strip()]
-        limite = int(self.limit_tabs.get())
+        self.max_pestanas = int(self.limit_tabs.get())
+        
+        perfil_seleccionado = self.combo_perfil.get()
+        exclude_keywords = []
+        if perfil_seleccionado in PERFILES:
+            exclude_keywords = PERFILES[perfil_seleccionado].get("exclude_keywords", [])
+        
         total_abiertas = 0
+        skills_filtradas = []
         
         for skill in skills_a_buscar:
-            if total_abiertas >= limite: 
+            if any(exclude.lower() in skill.lower() for exclude in exclude_keywords):
+                continue
+            skills_filtradas.append(skill)
+        
+        for skill in skills_filtradas:
+            if total_abiertas >= self.max_pestanas:
                 break
             skill_url = skill.replace(" ", "+")
             
-            for portal, url_base in PORTALES.items():
-                if total_abiertas >= limite: 
+            for portal_name, portal_adapter in PORTALES.items():
+                if total_abiertas >= self.max_pestanas:
                     break
-                url_final = url_base.format(skill_url)
+                url_final = portal_adapter.build_search_url(skill, location="Argentina")
                 webbrowser.open(url_final)
-                guardar_busqueda(portal, skill, url_final)
+                
+                fingerprint = calcular_fingerprint(portal_name, skill, "Argentina")
+                guardar_busqueda(portal_name, skill, url_final, fingerprint)
+                guardar_metrica(skill, portal_name, 0)
+                
                 total_abiertas += 1
         
+        self.pestanas_abiertas = total_abiertas
         self.cargar_historial_gui()
-        messagebox.showinfo("Listo bo", f"Se abrieron {total_abiertas} pestañas. A aplicar.")
+        messagebox.showinfo("Listo bo", f"Se abrieron {total_abiertas} pestañas (RAM Mode: {self.max_pestanas}). A aplicar.")
 
 if __name__ == "__main__":
     app = PalaFinderApp()
