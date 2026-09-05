@@ -6,6 +6,7 @@ import webbrowser
 import json
 import os
 import sqlite3
+import re
 from datetime import datetime
 
 ctk.set_appearance_mode("dark")
@@ -16,7 +17,6 @@ def cargar_skills():
         with open('skills.json', 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
-        print("No se encontró skills.json")
         return {}
 
 def cargar_perfiles():
@@ -25,14 +25,12 @@ def cargar_perfiles():
         with open('profiles.json', 'r', encoding='utf-8') as f:
             perfiles.update(json.load(f))
     except FileNotFoundError:
-        print("No se encontró profiles.json")
-    
+        pass
     try:
         with open('custom_profiles.json', 'r', encoding='utf-8') as f:
             perfiles.update(json.load(f))
     except FileNotFoundError:
         pass
-    
     return perfiles
 
 def guardar_perfiles_custom(perfiles_custom):
@@ -45,11 +43,7 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS busquedas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha TEXT,
-            portal TEXT,
-            skill_buscada TEXT,
-            url TEXT,
-            favorito INTEGER DEFAULT 0
+            fecha TEXT, portal TEXT, skill_buscada TEXT, url TEXT, favorito INTEGER DEFAULT 0
         )
     ''')
     conn.commit()
@@ -58,10 +52,8 @@ def init_db():
 def guardar_busqueda(portal, skill, url):
     conn = sqlite3.connect('historial.db')
     cursor = conn.cursor()
-    cursor.execute(
-        'INSERT INTO busquedas (fecha, portal, skill_buscada, url) VALUES (?, ?, ?, ?)',
-        (datetime.now().strftime('%Y-%m-%d %H:%M'), portal, skill, url)
-    )
+    cursor.execute('INSERT INTO busquedas (fecha, portal, skill_buscada, url) VALUES (?, ?, ?, ?)',
+                   (datetime.now().strftime('%Y-%m-%d %H:%M'), portal, skill, url))
     conn.commit()
     conn.close()
 
@@ -82,7 +74,6 @@ def limpiar_historial():
 
 SKILL_ALIASES = cargar_skills()
 PERFILES = cargar_perfiles()
-GENERAL_KEYWORDS = list(SKILL_ALIASES.keys()) if SKILL_ALIASES else []
 
 PORTALES = {
     "LinkedIn": "https://www.linkedin.com/jobs/search/?keywords={}&location=Argentina&f_WT=2",
@@ -95,9 +86,11 @@ class PalaFinderApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Pala Finder 3000")
-        self.geometry("850x950")
+        self.geometry("900x1000")
         self.cv_path = ""
         self.cv_skills = set()
+        self.cv_years = 0
+        self.cv_modality = "Cualquiera"
         init_db()
         self.crear_interfaz()
         
@@ -129,22 +122,26 @@ class PalaFinderApp(ctk.CTk):
         self.label_instruccion = ctk.CTkLabel(self, text="Skills detectadas (editables):", font=ctk.CTkFont(size=14))
         self.label_instruccion.pack(pady=5)
         
-        self.text_skills = ctk.CTkTextbox(self, width=700, height=100)
+        self.text_skills = ctk.CTkTextbox(self, width=750, height=80)
         self.text_skills.pack(pady=5)
         self.text_skills.insert("0.0", "Cargá un CV para auto-detectar las skills...")
         self.text_skills.configure(state="disabled")
         
+        # Match Score y Skill Gap
         self.frame_match = ctk.CTkFrame(self)
-        self.frame_match.pack(pady=5, padx=20, fill="x")
+        self.frame_match.pack(pady=10, padx=20, fill="x")
         
-        self.label_match_score = ctk.CTkLabel(self.frame_match, text="Match Score: --%", font=ctk.CTkFont(size=18, weight="bold"))
-        self.label_match_score.pack(pady=3)
+        self.label_match_score = ctk.CTkLabel(self.frame_match, text="Match Score: --%", font=ctk.CTkFont(size=20, weight="bold"))
+        self.label_match_score.pack(pady=5)
         
         self.label_match_details = ctk.CTkLabel(self.frame_match, text="", justify="left")
-        self.label_match_details.pack(pady=3)
+        self.label_match_details.pack(pady=5)
+        
+        self.label_skill_gap = ctk.CTkLabel(self.frame_match, text="", justify="left", text_color="#f39c12")
+        self.label_skill_gap.pack(pady=5)
         
         frame_config = ctk.CTkFrame(self)
-        frame_config.pack(pady=5, padx=20, fill="x")
+        frame_config.pack(pady=10, padx=20, fill="x")
         
         ctk.CTkLabel(frame_config, text="Máximo de pestañas:").grid(row=0, column=0, padx=10, pady=5)
         self.limit_tabs = ctk.CTkComboBox(frame_config, values=["2", "3", "4", "5", "6", "8", "10"])
@@ -177,7 +174,7 @@ class PalaFinderApp(ctk.CTk):
         self.btn_limpiar = ctk.CTkButton(frame_historial_header, text="Limpiar", command=self.limpiar_historial_gui, width=80, height=25, fg_color="#dc3545", hover_color="#c82333")
         self.btn_limpiar.pack(side="right", padx=10)
         
-        self.tree = ttk.Treeview(frame_historial, columns=("fecha", "portal", "skill", "url"), show="headings", height=8)
+        self.tree = ttk.Treeview(frame_historial, columns=("fecha", "portal", "skill", "url"), show="headings", height=6)
         self.tree.heading("fecha", text="Fecha")
         self.tree.heading("portal", text="Portal")
         self.tree.heading("skill", text="Skill")
@@ -199,12 +196,9 @@ class PalaFinderApp(ctk.CTk):
     def cargar_historial_gui(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
-        
-        historial = obtener_historial()
-        for row in historial:
+        for row in obtener_historial():
             fecha, portal, skill, url, favorito = row
-            icono = "★" if favorito else ""
-            self.tree.insert("", "end", values=(f"{fecha} {icono}", portal, skill, url))
+            self.tree.insert("", "end", values=(fecha, portal, skill, url))
     
     def limpiar_historial_gui(self):
         if messagebox.askyesno("Confirmar", "¿Seguro que querés borrar todo el historial?"):
@@ -224,12 +218,20 @@ class PalaFinderApp(ctk.CTk):
         ctk.CTkLabel(ventana, text="Skills Requeridas (separadas por coma):", font=ctk.CTkFont(size=12)).pack(pady=10)
         text_requeridas = ctk.CTkTextbox(ventana, width=400, height=80)
         text_requeridas.pack(pady=5)
-        text_requeridas.insert("0.0", "excel, contable, sql")
         
         ctk.CTkLabel(ventana, text="Skills Deseables (separadas por coma):", font=ctk.CTkFont(size=12)).pack(pady=10)
         text_deseables = ctk.CTkTextbox(ventana, width=400, height=80)
         text_deseables.pack(pady=5)
-        text_deseables.insert("0.0", "sap, power bi, inglés")
+        
+        ctk.CTkLabel(ventana, text="Seniority (Junior/Mid/Senior):", font=ctk.CTkFont(size=12)).pack(pady=10)
+        combo_seniority = ctk.CTkComboBox(ventana, values=["Junior", "Mid", "Senior"])
+        combo_seniority.set("Junior")
+        combo_seniority.pack(pady=5)
+        
+        ctk.CTkLabel(ventana, text="Modalidad (Remoto/Hibrido/Presencial):", font=ctk.CTkFont(size=12)).pack(pady=10)
+        combo_modality = ctk.CTkComboBox(ventana, values=["Remoto", "Hibrido", "Presencial", "Cualquiera"])
+        combo_modality.set("Remoto")
+        combo_modality.pack(pady=5)
         
         def guardar():
             nombre = entry_nombre.get().strip()
@@ -253,8 +255,8 @@ class PalaFinderApp(ctk.CTk):
             custom_profiles[nombre] = {
                 "skills_requeridas": skills_req,
                 "skills_deseables": skills_des,
-                "experiencia_minima": "Personalizado",
-                "seniority": "Personalizado"
+                "seniority": combo_seniority.get(),
+                "modality": combo_modality.get()
             }
             
             guardar_perfiles_custom(custom_profiles)
@@ -280,6 +282,7 @@ class PalaFinderApp(ctk.CTk):
             texto = "".join([pagina.get_text() for pagina in doc]).lower()
             doc.close()
             
+            # Detectar skills
             skills_detectadas = set()
             for skill_base, aliases in SKILL_ALIASES.items():
                 if skill_base in texto:
@@ -288,8 +291,17 @@ class PalaFinderApp(ctk.CTk):
                     if alias in texto:
                         skills_detectadas.add(skill_base)
                         break
-            
             self.cv_skills = skills_detectadas
+            
+            # Detectar años de experiencia (regex simple)
+            years_matches = re.findall(r'(\d+)\s*(años|years|anos)', texto)
+            self.cv_years = max([int(y[0]) for y in years_matches]) if years_matches else 0
+            
+            # Detectar modalidad
+            self.cv_modality = "Cualquiera"
+            if "remoto" in texto or "remote" in texto: self.cv_modality = "Remoto"
+            elif "hibrido" in texto or "hybrid" in texto: self.cv_modality = "Hibrido"
+            elif "presencial" in texto or "onsite" in texto: self.cv_modality = "Presencial"
             
             self.text_skills.configure(state="normal")
             self.text_skills.delete("0.0", "end")
@@ -315,24 +327,49 @@ class PalaFinderApp(ctk.CTk):
         perfil = PERFILES[perfil_seleccionado]
         skills_requeridas = set(perfil["skills_requeridas"])
         skills_deseables = set(perfil["skills_deseables"])
+        perfil_seniority = perfil.get("seniority", "Junior")
+        perfil_modality = perfil.get("modality", "Cualquiera")
         
+        # 1. Score de Skills (60%)
         skills_encontradas_req = skills_requeridas.intersection(self.cv_skills)
         skills_encontradas_des = skills_deseables.intersection(self.cv_skills)
+        score_skills = (len(skills_encontradas_req) / len(skills_requeridas) * 0.6) if skills_requeridas else 0
+        score_skills += (len(skills_encontradas_des) / len(skills_deseables) * 0.2) if skills_deseables else 0
         
-        skills_faltantes_req = skills_requeridas - self.cv_skills
-        skills_faltantes_des = skills_deseables - self.cv_skills
+        # 2. Score de Seniority (20%)
+        score_seniority = 0
+        seniority_ranges = {"Junior": (0, 2), "Mid": (2, 5), "Senior": (5, 99)}
+        if perfil_seniority in seniority_ranges:
+            min_y, max_y = seniority_ranges[perfil_seniority]
+            if min_y <= self.cv_years <= max_y:
+                score_seniority = 0.2
+            elif abs(self.cv_years - min_y) <= 1: # Margen de error de 1 año
+                score_seniority = 0.1
         
-        score_requeridas = len(skills_encontradas_req) / len(skills_requeridas) * 70 if skills_requeridas else 0
-        score_deseables = len(skills_encontradas_des) / len(skills_deseables) * 30 if skills_deseables else 0
-        match_percentage = int(score_requeridas + score_deseables)
+        # 3. Score de Modalidad (20%)
+        score_modality = 0.2 if perfil_modality == "Cualquiera" or perfil_modality == self.cv_modality else 0.0
+        
+        # Total
+        match_percentage = int((score_skills + score_seniority + score_modality) * 100)
         
         self.label_match_score.configure(text=f"Match Score: {match_percentage}%")
         
-        details = f"✓ Skills requeridas: {', '.join(sorted(skills_encontradas_req)) if skills_encontradas_req else 'Ninguna'}\n"
-        details += f"✗ Faltan: {', '.join(sorted(skills_faltantes_req)) if skills_faltantes_req else 'Ninguna'}\n"
-        details += f"★ Deseables: {', '.join(sorted(skills_encontradas_des)) if skills_encontradas_des else 'Ninguna'}"
-        
+        details = f"✓ Skills: {', '.join(sorted(skills_encontradas_req)) if skills_encontradas_req else 'Ninguna'}\n"
+        details += f"✗ Faltan: {', '.join(sorted(skills_requeridas - self.cv_skills)) if skills_requeridas - self.cv_skills else 'Ninguna'}\n"
+        details += f"📅 Experiencia detectada: {self.cv_years} años (Perfil pide: {perfil_seniority})\n"
+        details += f"🏠 Modalidad detectada: {self.cv_modality} (Perfil pide: {perfil_modality})"
         self.label_match_details.configure(text=details)
+        
+        # Skill Gap Analytics
+        skills_faltantes = list(skills_requeridas - self.cv_skills)
+        if skills_faltantes:
+            # Calcular score potencial si aprende las skills faltantes
+            potential_score_skills = 0.8 # 60% requeridas + 20% deseables (asumiendo que aprende las req)
+            potential_total = int((potential_score_skills + score_seniority + score_modality) * 100)
+            gap_text = f"🚀 Skill Gap: Si aprendés {', '.join(skills_faltantes[:3])}, tu match subiría al {potential_total}%"
+            self.label_skill_gap.configure(text=gap_text)
+        else:
+            self.label_skill_gap.configure(text="🔥 ¡Tenés todas las skills requeridas! Enfocate en seniority y modalidad.")
 
     def agregar_portal(self):
         nombre = self.entry_portal_name.get().strip()
