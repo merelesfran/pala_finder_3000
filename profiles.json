@@ -1,0 +1,32 @@
+{
+    "Backend Python": {
+        "skills_requeridas": ["python", "sql", "git", "linux", "api"],
+        "skills_deseables": ["docker", "aws", "fastapi", "postgresql", "redis"],
+        "experiencia_minima": "1 año",
+        "seniority": "Junior/Mid"
+    },
+    "Full Stack Developer": {
+        "skills_requeridas": ["javascript", "html", "css", "sql", "git"],
+        "skills_deseables": ["react", "node", "docker", "aws", "typescript"],
+        "experiencia_minima": "1 año",
+        "seniority": "Junior/Mid"
+    },
+    "Soporte IT": {
+        "skills_requeridas": ["soporte", "windows", "linux", "redes"],
+        "skills_deseables": ["active directory", "office 365", "vmware", "backup"],
+        "experiencia_minima": "6 meses",
+        "seniority": "Junior"
+    },
+    "Data Analyst": {
+        "skills_requeridas": ["sql", "python", "excel"],
+        "skills_deseables": ["power bi", "tableau", "pandas", "numpy", "r"],
+        "experiencia_minima": "1 año",
+        "seniority": "Junior/Mid"
+    },
+    "DevOps Junior": {
+        "skills_requeridas": ["linux", "git", "docker"],
+        "skills_deseables": ["aws", "kubernetes", "jenkins", "terraform", "ansible"],
+        "experiencia_minima": "1 año",
+        "seniority": "Junior"
+    }
+}

@@ -9,23 +9,26 @@ import os
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-
 def cargar_skills():
     try:
         with open('skills.json', 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
-        print("No se encontró skills.json, usando defaults")
+        print("No se encontró skills.json")
+        return {}
+
+def cargar_perfiles():
+    try:
+        with open('profiles.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("No se encontró profiles.json")
         return {}
 
 SKILL_ALIASES = cargar_skills()
+PERFILES = cargar_perfiles()
 
-GENERAL_KEYWORDS = list(SKILL_ALIASES.keys()) if SKILL_ALIASES else [
-    "python", "sql", "javascript", "html", "css", "linux", "git", "api", 
-    "soporte", "help desk", "windows", "redes", "hardware", "excel", "word",
-    "ventas", "atencion al cliente", "administrativo", "logistica", "contable",
-    "marketing", "seo", "redes sociales", "diseño", "photoshop", "illustrator"
-]
+GENERAL_KEYWORDS = list(SKILL_ALIASES.keys()) if SKILL_ALIASES else []
 
 PORTALES = {
     "LinkedIn": "https://www.linkedin.com/jobs/search/?keywords={}&location=Argentina&f_WT=2",
@@ -38,8 +41,9 @@ class PalaFinderApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Pala Finder 3000")
-        self.geometry("700x700")
+        self.geometry("750x800")
         self.cv_path = ""
+        self.cv_skills = set()
         self.crear_interfaz()
         
     def crear_interfaz(self):
@@ -55,12 +59,33 @@ class PalaFinderApp(ctk.CTk):
         self.label_estado = ctk.CTkLabel(frame_cv, text="Ningún archivo seleccionado", text_color="gray")
         self.label_estado.grid(row=0, column=1, padx=10, pady=10)
         
+        # Selector de perfil
+        if PERFILES:
+            frame_perfil = ctk.CTkFrame(self)
+            frame_perfil.pack(pady=10, padx=20, fill="x")
+            
+            ctk.CTkLabel(frame_perfil, text="Perfil objetivo:").grid(row=0, column=0, padx=10, pady=10)
+            self.combo_perfil = ctk.CTkComboBox(frame_perfil, values=list(PERFILES.keys()), command=self.calcular_match)
+            self.combo_perfil.set("Seleccionar perfil...")
+            self.combo_perfil.grid(row=0, column=1, padx=10, pady=10)
+        
         self.label_instruccion = ctk.CTkLabel(self, text="Skills detectadas (editables):", font=ctk.CTkFont(size=14))
         self.label_instruccion.pack(pady=5)
         
-        self.text_skills = ctk.CTkTextbox(self, width=600, height=150)
+        self.text_skills = ctk.CTkTextbox(self, width=650, height=120)
         self.text_skills.pack(pady=10)
         self.text_skills.insert("0.0", "Cargá un CV para auto-detectar las skills...")
+        self.text_skills.configure(state="disabled")
+        
+        # Match Score
+        self.frame_match = ctk.CTkFrame(self)
+        self.frame_match.pack(pady=10, padx=20, fill="x")
+        
+        self.label_match_score = ctk.CTkLabel(self.frame_match, text="Match Score: --%", font=ctk.CTkFont(size=20, weight="bold"))
+        self.label_match_score.pack(pady=5)
+        
+        self.label_match_details = ctk.CTkLabel(self.frame_match, text="", justify="left")
+        self.label_match_details.pack(pady=5)
         
         frame_config = ctk.CTkFrame(self)
         frame_config.pack(pady=10, padx=20, fill="x")
@@ -97,26 +122,60 @@ class PalaFinderApp(ctk.CTk):
             texto = "".join([pagina.get_text() for pagina in doc]).lower()
             doc.close()
             
-            
             skills_detectadas = set()
             for skill_base, aliases in SKILL_ALIASES.items():
-                # Buscar la skill base
                 if skill_base in texto:
                     skills_detectadas.add(skill_base)
-                # Buscar los aliases
                 for alias in aliases:
                     if alias in texto:
                         skills_detectadas.add(skill_base)
                         break
             
+            self.cv_skills = skills_detectadas
+            
+            self.text_skills.configure(state="normal")
             self.text_skills.delete("0.0", "end")
             if skills_detectadas:
                 self.text_skills.insert("0.0", ", ".join(sorted(skills_detectadas)))
             else:
                 self.text_skills.insert("0.0", "No se detectaron skills. Escribilas a mano separadas por coma.")
+            self.text_skills.configure(state="normal")
+            
+            self.calcular_match()
                 
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo leer el PDF:\n{e}")
+
+    def calcular_match(self, event=None):
+        if not self.cv_skills or not PERFILES:
+            return
+        
+        perfil_seleccionado = self.combo_perfil.get()
+        if perfil_seleccionado not in PERFILES:
+            return
+        
+        perfil = PERFILES[perfil_seleccionado]
+        skills_requeridas = set(perfil["skills_requeridas"])
+        skills_deseables = set(perfil["skills_deseables"])
+        
+        skills_encontradas_req = skills_requeridas.intersection(self.cv_skills)
+        skills_encontradas_des = skills_deseables.intersection(self.cv_skills)
+        
+        skills_faltantes_req = skills_requeridas - self.cv_skills
+        skills_faltantes_des = skills_deseables - self.cv_skills
+        
+        # Calcular score (requeridas valen más)
+        score_requeridas = len(skills_encontradas_req) / len(skills_requeridas) * 70 if skills_requeridas else 0
+        score_deseables = len(skills_encontradas_des) / len(skills_deseables) * 30 if skills_deseables else 0
+        match_percentage = int(score_requeridas + score_deseables)
+        
+        self.label_match_score.configure(text=f"Match Score: {match_percentage}%")
+        
+        details = f"✓ Skills requeridas: {', '.join(sorted(skills_encontradas_req)) if skills_encontradas_req else 'Ninguna'}\n"
+        details += f"✗ Faltan: {', '.join(sorted(skills_faltantes_req)) if skills_faltantes_req else 'Ninguna'}\n"
+        details += f"★ Deseables: {', '.join(sorted(skills_encontradas_des)) if skills_encontradas_des else 'Ninguna'}"
+        
+        self.label_match_details.configure(text=details)
 
     def agregar_portal(self):
         nombre = self.entry_portal_name.get().strip()
@@ -152,7 +211,7 @@ class PalaFinderApp(ctk.CTk):
                 webbrowser.open(url_final)
                 total_abiertas += 1
                 
-        messagebox.showinfo("Listo qliao", f"Se abrieron {total_abiertas} pestañas. A aplicar.")
+        messagebox.showinfo("Listo bo", f"Se abrieron {total_abiertas} pestañas. A aplicar.")
 
 if __name__ == "__main__":
     app = PalaFinderApp()
