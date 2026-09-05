@@ -3,20 +3,28 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import fitz
 import webbrowser
+import json
 import os
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-GENERAL_KEYWORDS = [
+
+def cargar_skills():
+    try:
+        with open('skills.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("No se encontró skills.json, usando defaults")
+        return {}
+
+SKILL_ALIASES = cargar_skills()
+
+GENERAL_KEYWORDS = list(SKILL_ALIASES.keys()) if SKILL_ALIASES else [
     "python", "sql", "javascript", "html", "css", "linux", "git", "api", 
     "soporte", "help desk", "windows", "redes", "hardware", "excel", "word",
     "ventas", "atencion al cliente", "administrativo", "logistica", "contable",
-    "marketing", "seo", "redes sociales", "diseño", "photoshop", "illustrator",
-    "java", "c++", "c#", "php", "ruby", "node", "react", "angular", "vue",
-    "docker", "aws", "azure", "google cloud", "scrum", "agile", "jira",
-    "ingles", "portugues", "frances", "liderazgo", "trabajo en equipo",
-    "caja", "reposicion", "mostrador", "telefonista", "recepcion", "chofer"
+    "marketing", "seo", "redes sociales", "diseño", "photoshop", "illustrator"
 ]
 
 PORTALES = {
@@ -89,11 +97,21 @@ class PalaFinderApp(ctk.CTk):
             texto = "".join([pagina.get_text() for pagina in doc]).lower()
             doc.close()
             
-            skills_detectadas = list(set([kw for kw in GENERAL_KEYWORDS if kw in texto]))
+            
+            skills_detectadas = set()
+            for skill_base, aliases in SKILL_ALIASES.items():
+                # Buscar la skill base
+                if skill_base in texto:
+                    skills_detectadas.add(skill_base)
+                # Buscar los aliases
+                for alias in aliases:
+                    if alias in texto:
+                        skills_detectadas.add(skill_base)
+                        break
             
             self.text_skills.delete("0.0", "end")
             if skills_detectadas:
-                self.text_skills.insert("0.0", ", ".join(skills_detectadas))
+                self.text_skills.insert("0.0", ", ".join(sorted(skills_detectadas)))
             else:
                 self.text_skills.insert("0.0", "No se detectaron skills. Escribilas a mano separadas por coma.")
                 
@@ -134,7 +152,7 @@ class PalaFinderApp(ctk.CTk):
                 webbrowser.open(url_final)
                 total_abiertas += 1
                 
-        messagebox.showinfo("Listo bo", f"Se abrieron {total_abiertas} pestañas. A aplicar.")
+        messagebox.showinfo("Listo qliao", f"Se abrieron {total_abiertas} pestañas. A aplicar.")
 
 if __name__ == "__main__":
     app = PalaFinderApp()
