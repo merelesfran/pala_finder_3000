@@ -1,7 +1,7 @@
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-import fitz
+import pymupdf
 import webbrowser
 import json
 import os
@@ -81,7 +81,7 @@ def guardar_metrica(skill, portal, match_score):
 def obtener_historial():
     conn = sqlite3.connect('historial.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT fecha, portal, skill_buscada, url, favorito FROM busquedas ORDER BY id DESC LIMIT 50')
+    cursor.execute('SELECT fecha, portal, skill_buscada, url, favorito FROM busquedas ORDER BY id DESC LIMIT 100')
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -144,11 +144,70 @@ PORTALES = {
         ["https://www.bumeran.com.ar/empleos-busqueda-{skill}.html"])
 }
 
+class HistorialWindow(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Historial de Búsquedas")
+        self.geometry("900x600")
+        self.grab_set()
+        
+        # Frame header
+        frame_header = ctk.CTkFrame(self)
+        frame_header.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(frame_header, text="Historial de Búsquedas", font=ctk.CTkFont(size=18, weight="bold")).pack(side="left", padx=10)
+        
+        self.btn_limpiar = ctk.CTkButton(frame_header, text="Limpiar Historial", command=self.limpiar_historial, 
+                                        width=150, height=30, fg_color="#dc3545", hover_color="#c82333")
+        self.btn_limpiar.pack(side="right", padx=10)
+        
+        # Frame para Treeview con scroll
+        frame_tree = tk.Frame(self, bg="#1e1e1e")
+        frame_tree.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        self.tree = ttk.Treeview(frame_tree, columns=("fecha", "portal", "skill", "url"), show="headings", height=20)
+        self.tree.heading("fecha", text="Fecha")
+        self.tree.heading("portal", text="Portal")
+        self.tree.heading("skill", text="Skill")
+        self.tree.heading("url", text="URL")
+        
+        self.tree.column("fecha", width=130, minwidth=100)
+        self.tree.column("portal", width=100, minwidth=80)
+        self.tree.column("skill", width=150, minwidth=100)
+        self.tree.column("url", width=500, minwidth=200)
+        
+        scrollbar_y = ttk.Scrollbar(frame_tree, orient="vertical", command=self.tree.yview)
+        scrollbar_x = ttk.Scrollbar(frame_tree, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+        
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar_y.grid(row=0, column=1, sticky="ns")
+        scrollbar_x.grid(row=1, column=0, sticky="ew")
+        
+        frame_tree.grid_rowconfigure(0, weight=1)
+        frame_tree.grid_columnconfigure(0, weight=1)
+        
+        self.cargar_historial()
+    
+    def cargar_historial(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        historial = obtener_historial()
+        for row in historial:
+            fecha, portal, skill, url, favorito = row
+            self.tree.insert("", "end", values=(fecha, portal, skill, url))
+    
+    def limpiar_historial(self):
+        if messagebox.askyesno("Confirmar", "¿Seguro que querés borrar todo el historial?"):
+            limpiar_historial()
+            self.cargar_historial()
+
 class PalaFinderApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Pala Finder 3000 - RAM Mode: LOW")
-        self.geometry("950x1050")
+        self.geometry("900x850")
         self.cv_path = ""
         self.cv_skills = set()
         self.cv_years = 0
@@ -189,7 +248,7 @@ class PalaFinderApp(ctk.CTk):
         self.label_instruccion = ctk.CTkLabel(self, text="Skills detectadas (editables):", font=ctk.CTkFont(size=14))
         self.label_instruccion.pack(pady=5)
         
-        self.text_skills = ctk.CTkTextbox(self, width=800, height=80)
+        self.text_skills = ctk.CTkTextbox(self, width=750, height=80)
         self.text_skills.pack(pady=5)
         self.text_skills.insert("0.0", "Cargá un CV para auto-detectar las skills...")
         self.text_skills.configure(state="disabled")
@@ -216,7 +275,7 @@ class PalaFinderApp(ctk.CTk):
         self.limit_tabs.set("4")
         self.limit_tabs.grid(row=0, column=1, padx=10, pady=5)
         
-        self.label_ram_mode = ctk.CTkLabel(frame_config, text=" RAM Mode: LOW", text_color="#28a745")
+        self.label_ram_mode = ctk.CTkLabel(frame_config, text="🟢 RAM Mode: LOW", text_color="#28a745")
         self.label_ram_mode.grid(row=0, column=2, padx=10, pady=5)
         
         ctk.CTkLabel(frame_config, text="Nuevo Portal (Nombre):").grid(row=1, column=0, padx=10, pady=3)
@@ -242,57 +301,14 @@ class PalaFinderApp(ctk.CTk):
         self.label_metricas = ctk.CTkLabel(self.frame_metricas, text="Cargá el CV y empezá a buscar para ver métricas", justify="left")
         self.label_metricas.pack(pady=5)
         
-        # Historial
-        frame_historial = ctk.CTkFrame(self)
-        frame_historial.pack(pady=10, padx=20, fill="both", expand=True)
+        # Botón Ver Historial
+        self.btn_historial = ctk.CTkButton(self, text="📋 Ver Historial de Búsquedas", command=self.abrir_historial, 
+                                          width=250, height=35, fg_color="#3498db", hover_color="#2980b9")
+        self.btn_historial.pack(pady=10)
         
-        frame_historial_header = ctk.CTkFrame(frame_historial)
-        frame_historial_header.pack(fill="x", padx=5, pady=5)
-        
-        ctk.CTkLabel(frame_historial_header, text="Historial de Búsquedas", font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=10)
-        
-        self.btn_limpiar = ctk.CTkButton(frame_historial_header, text="Limpiar", command=self.limpiar_historial_gui, width=80, height=25, fg_color="#dc3545", hover_color="#c82333")
-        self.btn_limpiar.pack(side="right", padx=10)
-        
-        self.tree = ttk.Treeview(frame_historial, columns=("fecha", "portal", "skill", "url"), show="headings", height=6)
-        self.tree.heading("fecha", text="Fecha")
-        self.tree.heading("portal", text="Portal")
-        self.tree.heading("skill", text="Skill")
-        self.tree.heading("url", text="URL")
-        
-        self.tree.column("fecha", width=120)
-        self.tree.column("portal", width=100)
-        self.tree.column("skill", width=120)
-        self.tree.column("url", width=400)
-        
-        scrollbar = ttk.Scrollbar(frame_historial, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scrollbar.set)
-        
-        self.tree.pack(side="left", fill="both", expand=True, padx=5, pady=5)
-        scrollbar.pack(side="right", fill="y", pady=5)
-        
-        self.cargar_historial_gui()
-        
-    def cargar_historial_gui(self):
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        for row in obtener_historial():
-            fecha, portal, skill, url, favorito = row
-            self.tree.insert("", "end", values=(fecha, portal, skill, url))
-        
-        metricas = obtener_metricas()
-        if metricas['total_busquedas'] > 0:
-            skills_text = "\n".join([f"{s[0]}: {s[1]} búsquedas" for s in metricas['skills'][:5]])
-            metrics_text = (f"Total búsquedas: {metricas['total_busquedas']}\n"
-                          f"Duplicados detectados: {metricas['duplicados']}\n\n"
-                          f"Skills más buscadas:\n{skills_text}")
-            self.label_metricas.configure(text=metrics_text)
+    def abrir_historial(self):
+        ventana = HistorialWindow(self)
     
-    def limpiar_historial_gui(self):
-        if messagebox.askyesno("Confirmar", "¿Seguro que querés borrar todo el historial?"):
-            limpiar_historial()
-            self.cargar_historial_gui()
-        
     def actualizar_ram_mode(self, event=None):
         self.max_pestanas = int(self.limit_tabs.get())
         if self.max_pestanas <= 3:
@@ -382,7 +398,7 @@ class PalaFinderApp(ctk.CTk):
             
     def analizar_cv(self):
         try:
-            doc = fitz.open(self.cv_path)
+            doc = pymupdf.open(self.cv_path)
             texto = "".join([pagina.get_text() for pagina in doc]).lower()
             doc.close()
             
@@ -457,17 +473,17 @@ class PalaFinderApp(ctk.CTk):
         details += f"📅 Experiencia: {self.cv_years} años (Perfil: {perfil_seniority})\n"
         details += f"🏠 Modalidad: {self.cv_modality} (Perfil: {perfil_modality})"
         if exclude_keywords:
-            details += f"\n Excluye: {', '.join(exclude_keywords[:3])}"
+            details += f"\n🚫 Excluye: {', '.join(exclude_keywords[:3])}"
         self.label_match_details.configure(text=details)
         
         skills_faltantes = list(skills_requeridas - self.cv_skills)
         if skills_faltantes:
             potential_score_skills = 0.8
             potential_total = int((potential_score_skills + score_seniority + score_modality) * 100)
-            gap_text = f" Skill Gap: Si aprendés {', '.join(skills_faltantes[:3])}, subirías al {potential_total}%"
+            gap_text = f"🚀 Skill Gap: Si aprendés {', '.join(skills_faltantes[:3])}, subirías al {potential_total}%"
             self.label_skill_gap.configure(text=gap_text)
         else:
-            self.label_skill_gap.configure(text="🔥 ¡Tenés todas las skills requeridas!")
+            self.label_skill_gap.configure(text=" ¡Tenés todas las skills requeridas!")
 
     def agregar_portal(self):
         nombre = self.entry_portal_name.get().strip()
@@ -521,7 +537,6 @@ class PalaFinderApp(ctk.CTk):
                 total_abiertas += 1
         
         self.pestanas_abiertas = total_abiertas
-        self.cargar_historial_gui()
         messagebox.showinfo("Listo bo", f"Se abrieron {total_abiertas} pestañas (RAM Mode: {self.max_pestanas}). A aplicar.")
 
 if __name__ == "__main__":
